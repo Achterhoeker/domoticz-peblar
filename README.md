@@ -99,6 +99,9 @@ If you encounter issues during installation or setup, check the following:
 
 If you'd like to contribute to the development of the Peblar plugin, feel free to fork the repository and submit a pull request.
 
+### Disclaimer
+This is a personal project and is still a work in progress. This project and myself are not affiliated with Peblar / Prodrive Technologies NE B.V.
+
 ### License
 
 This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for more details.
