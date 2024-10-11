@@ -55,6 +55,11 @@ For proper load balancing, you will need to provide the following information du
 - **IDX of the Main Meter (P1 Meter)**: This is the identifier for your main meter in Domoticz.
 - **Maximum Current in Amperes**: Specify the maximum current of your home connection in amperes.
 
+There are 3 charging modes you can choose:
+- LoadBalancing : Only load balancing is applied, the car will be charged as fast as possible
+- RelaxedLoading : The car will be charged as low as possible, only available solar energy will speed up. At night (after 23.00) the charging wil be as fast as possible. (to ensure a full car nect day)
+- SolarOnly : Charging is only allowed if there is enough solar energy. Without solar energy the charging process will be paused. 
+
 ### Updating the Plugin
 
 To update the Peblar plugin to the latest version, follow these steps:
