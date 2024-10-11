@@ -36,9 +36,7 @@ Follow these steps to install the Peblar plugin in your Domoticz setup:
 
 3. **Configure the Plugin**:
    - After restarting, go to the Domoticz web interface.
-   - Navigate to **Settings** > **Plugins**.
-   - Find the Peblar plugin in the list and click **Configure**.
-   - Follow the on-screen instructions to set up your Peblar devices.
+   - In Domoticz -> Hardware select the Wallbox plugin.
 
 ### Connecting to the Peblar REST API
 
