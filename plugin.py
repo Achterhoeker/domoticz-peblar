@@ -197,7 +197,7 @@ class PeblarPlugin:
                         Domoticz.Error("Command error: "+str(err))
                 elif (Message["Type"] == "Loadbalance"):
                     Domoticz.Debug("Loadbalance start")
-                    url = f"http://{self.domoticz_ip}:{self.domoticz_port}/json.htm?type=devices&rid={self.mainpowerdeviceidx}"
+                    url = f"http://{self.domoticz_ip}:{self.domoticz_port}/json.htm?type=command&param=getdevices&rid={self.mainpowerdeviceidx}"
                     response = requests.get(url)
                     if response.status_code == 200:
                         data = response.json()
