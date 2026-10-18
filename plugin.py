@@ -133,7 +133,7 @@ class PeblarPlugin:
             self.MaxHousholdAmperes = int(Parameters['Mode2'])
             Domoticz.Debug('MaxHousholdAmperes = ' + str(self.MaxHousholdAmperes))
             
-            self.has_ct_clamps = Parameters.get("Mode3", "0") == "1"
+            self.has_ct_clamps = Parameters.get("Mode3", "0") == "True"
             Domoticz.Log("CT klemmen aanwezig: " + str(self.has_ct_clamps))
                             
             self.domoticz_port =  8080 
@@ -180,6 +180,8 @@ class PeblarPlugin:
         self.authenticated = True
 
         self.initDevices(self.chargerId)
+
+        Domoticz.Log("Mode3 = '{}'".format(Parameters["Mode3"]))
 
         Domoticz.Debug("Entering message handler")
         while not self.stop_event.is_set():
