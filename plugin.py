@@ -133,11 +133,7 @@ class PeblarPlugin:
             self.MaxHousholdAmperes = int(Parameters['Mode2'])
             Domoticz.Debug('MaxHousholdAmperes = ' + str(self.MaxHousholdAmperes))
             
-<<<<<<< Updated upstream
-            self.has_ct_clamps = Parameters.get("Mode3", "0") == "True"
-=======
             self.has_ct_clamps = Parameters['Mode3'] == "True"
->>>>>>> Stashed changes
             Domoticz.Log("CT klemmen aanwezig: " + str(self.has_ct_clamps))
                             
             self.domoticz_port =  8080 
