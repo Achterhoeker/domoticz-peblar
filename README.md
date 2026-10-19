@@ -54,6 +54,7 @@ For proper load balancing, you will need to provide the following information du
 
 - **IDX of the Main Meter (P1 Meter)**: This is the identifier for your main meter in Domoticz.
 - **Maximum Current in Amperes**: Specify the maximum current of your home connection in amperes.
+- **Use CT-clamps for LoadBalancing**: Set to yes if the Peblar is installed with CT-clamps. The peblar will base max load on CT-clamps measurements.  
 
 There are 3 charging modes you can choose:
 - LoadBalancing : Only load balancing is applied, the car will be charged as fast as possible

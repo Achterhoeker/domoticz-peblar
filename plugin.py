@@ -2,6 +2,7 @@
 #
 # Author: Achterhoeker
 # Mods: 
+# RD: Modified to support hardware-based CT clamps load balancing co-existing with Domoticz Solar Modes.
 #
 """
 <plugin key="Peblar" name="Peblar" author="Achterhoeker" version="0.0.1" wikilink="https://github.com/Achterhoeker/domoticz-peblar" externallink="https://github.com/Achterhoeker/domoticz-peblar">
@@ -40,6 +41,12 @@
         <param field="Password" label="Api token" width="400px" required="true" default="" password="false"/>
         <param field="Mode1" label="Idx nr household power meter" width="100px" required="false" default="0" password="false"/>
         <param field="Mode2" label="Maximum power usage in Ampere for houshold" width="100px" required="false" default="35" password="false"/>        
+        <param field="Mode3" label="Use CT-clamps for LoadBalancing" width="400px" required="true">
+            <options>
+                <option label="No (Domoticz loadbalances from power meter and settings)" value="False" default="true"/>
+                <option label="Yes (Peblar will maximize loadbalancing)" value="True"/>
+            </options>
+        </param>  
         <param field="Mode6" label="Debug" width="150px">
             <options>
                 <option label="None" value="0" default="true" />
@@ -103,6 +110,7 @@ class PeblarPlugin:
         self.MaxHousholdAmperes = 35  # Maximum stroom die het huis mag afnemen
         self.lastChargeLimit = 0      # Laatste ingestelde laadstroom
         self.Profile = "LoadBalancing"  # Huidig profiel
+        self.has_ct_clamps = False      # Dynamic loadbalancing vanuit P1 meter
         self.lastDisabledTime = 0     # Tijdstip waarop opladen is uitgeschakeld
         self.enableDelay = 300        # Wachttijd voordat de lader weer mag inschakelen (5 minuten in seconden)
         self.nightStart = 23          # Nachtstroom begint om 23:00
@@ -124,6 +132,9 @@ class PeblarPlugin:
             Domoticz.Debug('mainpowerdeviceidx = ' + str(self.mainpowerdeviceidx))
             self.MaxHousholdAmperes = int(Parameters['Mode2'])
             Domoticz.Debug('MaxHousholdAmperes = ' + str(self.MaxHousholdAmperes))
+            
+            self.has_ct_clamps = Parameters['Mode3'] == "True"
+            Domoticz.Log("CT klemmen aanwezig: " + str(self.has_ct_clamps))
                             
             self.domoticz_port =  8080 
             #Settings["ListenPort"]
@@ -169,6 +180,8 @@ class PeblarPlugin:
         self.authenticated = True
 
         self.initDevices(self.chargerId)
+
+        Domoticz.Log("Mode3 = '{}'".format(Parameters["Mode3"]))
 
         Domoticz.Debug("Entering message handler")
         while not self.stop_event.is_set():
@@ -592,7 +605,7 @@ class PeblarPlugin:
                 {"Type":"Update", 
                 })
         if self.mainpowerdeviceidx != 0:
-            Domoticz.Debug(f"onHeartbeat asked loadbalncing")
+            Domoticz.Debug(f"onHeartbeat asked loadbalancing")
             self.messageQueue.put(
                 {"Type":"Loadbalance", 
                 })
@@ -623,20 +636,32 @@ class PeblarPlugin:
         profile_actions.get(self.Profile, lambda: None)()
 
     def handle_load_balancing(self, available_amperes):
-        Domoticz.Debug("control_charging")        
+        Domoticz.Debug("control_charging load balancing")        
         self.set_charge_within_limits(available_amperes + self.currentcurrent if (available_amperes + self.currentcurrent) >= 0 else 0)
+        
+        if self.has_ct_clamps:
+            # Bij CT-klemmen regelt de laadpaal zelf de LoadBalancing, de limiet zetten we op max.
+            Domoticz.Debug("CT loadbalancing")
+            self.set_charge_within_limits(self.MaxHousholdAmperes)
+        else:
+            Domoticz.Debug("P1 loadbalancing")
+            self.set_charge_within_limits(available_amperes + self.currentcurrent if (available_amperes + self.currentcurrent) >= 0 else 0)
 
     def handle_relaxed_loading(self, available_amperes, household_current):
-        Domoticz.Debug("control_charging")        
+        Domoticz.Debug("control_charging relaxed loading")        
         if self.is_night_time():
-            self.set_charge_within_limits(self.MaxHousholdAmperes - household_current)
+            if self.has_ct_clamps:
+                # Bij CT-klemmen regelt de laadpaal zelf de LoadBalancing, de limiet zetten we op max.
+                self.set_charge_within_limits(self.MaxHousholdAmperes)
+            else:
+                self.set_charge_within_limits(self.MaxHousholdAmperes - household_current)
         elif household_current < 0:
             self.set_charge_within_limits(max(-household_current + self.currentcurrent, 6))
         else:
             self.set_charge_within_limits(6)
 
     def handle_solar_only(self, available_amperes, household_current):
-        Domoticz.Debug("control_charging")
+        Domoticz.Debug("control_charging solar only")
         self.set_charge_within_limits(-household_current + self.currentcurrent  if (-household_current + self.currentcurrent) > 6 else 0)
 
     def set_charge_within_limits(self, available_amperes):
