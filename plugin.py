@@ -117,9 +117,15 @@ class PeblarPlugin:
         self.nightEnd = 6             # Nachtstroom eindigt om 06:00
         self.currentcurrent = 0       # last measured real current
         self.voltage = 230            # last measured voltage
+        self.phase_count = 0
+        self.force1phase_allowed = False
+        self.force1phase = None
         self.mainpowerdeviceidx = 0   # household power device to measure for loadbalancing
         self.domoticz_ip = "127.0.0.1"
         self.domoticz_port = None
+        # Keep one HTTP connection pool for the worker thread instead of
+        # creating and discarding a pool for every request.
+        self.http = requests.Session()
 
 
     def wbThread(self):
@@ -150,7 +156,7 @@ class PeblarPlugin:
         try:
             url = f"{self.base_url}/health"
             Domoticz.Log('Url = : ' + url)
-            response = requests.get(url, timeout=5)
+            response = self.http.get(url, timeout=10)
             if response.status_code == 200:
                 data = response.json()
                 self.ApiVersion = data.get("ApiVersion")
@@ -166,7 +172,7 @@ class PeblarPlugin:
         try:
             url = f"{self.base_url}/system"
             Domoticz.Log('Url = : ' + url)
-            response = requests.get(url, headers=self.headers, timeout=5)
+            response = self.http.get(url, headers=self.headers, timeout=10)
             if response.status_code == 200:
                 data = response.json()
                 self.chargerId = data.get("ProductSn")
@@ -180,6 +186,23 @@ class PeblarPlugin:
         self.authenticated = True
 
         self.initDevices(self.chargerId)
+
+        # Restore the selector's persisted mode; self.Profile otherwise
+        # remains at its default after every plugin restart.
+        try:
+            mode_level = Devices[str(self.chargerId)].Units[self.DEVICEMODESELECT].sValue
+            self.Profile = get_selectorprofile_from_level(str(mode_level))
+            self.updateSvalue(
+                self.DEVICEMODESELECT,
+                get_selectorlevel_from_profile(self.Profile),
+            )
+            Domoticz.Log(f"Restored charging profile: {self.Profile}")
+        except Exception as err:
+            self.Profile = "LoadBalancing"
+            Domoticz.Error(f"Could not restore charging profile; using LoadBalancing: {err}")
+
+        # Prime charger capability/state before the first load-balancing pass.
+        self.updateDevices(self.chargerId)
 
         Domoticz.Log("Mode3 = '{}'".format(Parameters["Mode3"]))
 
@@ -203,7 +226,12 @@ class PeblarPlugin:
                             Domoticz.Debug('Set new Max Charging to: ' + str(desiredmaxchargecurrent))
                             self.setChargeCurrentLimit(desiredmaxchargecurrent)
                         elif Message["Unit"]==self.DEVICEMODESELECT: # new charging mode selected
-                            self.Profile = get_selectorprofile_from_level( str(Message["Level"]))
+                            new_profile = get_selectorprofile_from_level(str(Message["Level"]))
+                            if new_profile != self.Profile:
+                                self.Profile = new_profile
+                                # A manual profile change should not inherit the
+                                # cooldown from pausing in the previous profile.
+                                self.lastDisabledTime = time.time() - self.enableDelay
                             self.updateSvalue(self.DEVICEMODESELECT, get_selectorlevel_from_profile(self.Profile))                            
                             Domoticz.Debug('Set new charging profile to: ' + self.Profile)
                     except Exception as err:
@@ -211,7 +239,7 @@ class PeblarPlugin:
                 elif (Message["Type"] == "Loadbalance"):
                     Domoticz.Debug("Loadbalance start")
                     url = f"http://{self.domoticz_ip}:{self.domoticz_port}/json.htm?type=command&param=getdevices&rid={self.mainpowerdeviceidx}"
-                    response = requests.get(url)
+                    response = self.http.get(url, timeout=10)
                     if response.status_code == 200:
                         data = response.json()
                         if "result" in data:
@@ -404,7 +432,7 @@ class PeblarPlugin:
     def updateEVInterfaceData(self):
         try:
             url = f"{self.base_url}/evinterface"
-            response = requests.get(url, headers=self.headers, timeout=10)
+            response = self.http.get(url, headers=self.headers, timeout=10)
             if response.status_code == 200:
                 data = response.json()
                 cp_state = data.get("CpState", "Unknown")
@@ -412,6 +440,7 @@ class PeblarPlugin:
                 self.updateSvalue(self.DEVICECPSTATE, cp_state)
 
                 lock_state = data.get("LockState", False)
+                self.force1phase = data.get("Force1Phase", False)
                 charge_current_limit = data.get("ChargeCurrentLimit")
                 self.updateSvalue(self.DEVICESELECTHARGINGCURRENT, get_selectorlevel_from_milliamp(charge_current_limit))
                 
@@ -430,7 +459,7 @@ class PeblarPlugin:
     def updateSystemData(self):
         try:
             url = f"{self.base_url}/system"
-            response = requests.get(url, headers=self.headers, timeout=10)
+            response = self.http.get(url, headers=self.headers, timeout=10)
             if response.status_code == 200:
                 data = response.json()
 
@@ -443,15 +472,16 @@ class PeblarPlugin:
                 wlan_signal_strength = data.get("WlanSignalStrength", None)
                 cellular_signal_strength = data.get("CellularSignalStrength", None)
                 uptime = data.get("Uptime", 0)
-                phase_count = data.get("PhaseCount", 0)
-                self.updateSvalue(self.DEVICENRPHASES, phase_count)
+                self.phase_count = data.get("PhaseCount", 0)
+                self.force1phase_allowed = data.get("Force1PhaseAllowed", False) is True
+                self.updateSvalue(self.DEVICENRPHASES, self.phase_count)
                 force1phase_allowed = data.get("Force1PhaseAllowed", False)
                 
                 Domoticz.Debug(f"Firmware Version: {firmware_version}")
                 Domoticz.Debug(f"WLAN Signal Strength: {wlan_signal_strength} dBm")
                 Domoticz.Debug(f"Cellular Signal Strength: {cellular_signal_strength} dBm")
                 Domoticz.Debug(f"Uptime: {uptime} seconds")
-                Domoticz.Debug(f"Phase Count: {phase_count}")
+                Domoticz.Debug(f"Phase Count: {self.phase_count}")
                 Domoticz.Debug(f"Force 1 Phase Allowed: {force1phase_allowed}")
 
             else:
@@ -462,7 +492,7 @@ class PeblarPlugin:
     def updateMeterData(self):
         try:
             url = f"{self.base_url}/meter"
-            response = requests.get(url, headers=self.headers, timeout=10)
+            response = self.http.get(url, headers=self.headers, timeout=10)
             if response.status_code == 200:
                 data = response.json()
 
@@ -506,6 +536,22 @@ class PeblarPlugin:
         except Exception as e:
             Domoticz.Error(f"Failed to fetch Meter data: {str(e)}")
 
+    def setForce1Phase(self, force_1_phase):
+        try:
+            url = f"{self.base_url}/evinterface"
+            payload = {"Force1Phase": force_1_phase}
+            response = self.http.patch(url, json=payload, headers=self.headers, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                self.force1phase = data.get("Force1Phase", force_1_phase)
+                phase_description = "1 phase" if self.force1phase else "3 phases"
+                Domoticz.Log(f"Peblar charging phase mode set to {phase_description}")
+            else:
+                Domoticz.Error(f"Failed to set Peblar phase mode: {response.status_code}")
+        except Exception as e:
+            Domoticz.Error(f"Exception while setting Peblar phase mode: {str(e)}")
+
     def setChargeCurrentLimit(self, current_limit):
         try:
             url = f"{self.base_url}/evinterface"
@@ -513,7 +559,7 @@ class PeblarPlugin:
                 "ChargeCurrentLimit": int(current_limit)
             }
             Domoticz.Debug(f"Payload: {payload}")
-            response = requests.patch(url, json=payload, headers=self.headers, timeout=5)
+            response = self.http.patch(url, json=payload, headers=self.headers, timeout=10)
             
             if response.status_code == 200:
                 Domoticz.Log(f"Charge Current Limit set to: {current_limit} mA")
@@ -568,6 +614,7 @@ class PeblarPlugin:
         self.stop_event.set()  
         if self.thread is not None:
             self.thread.join()  
+        self.http.close()
 
         Domoticz.Debug('Plugin stopped' )
 
@@ -636,9 +683,7 @@ class PeblarPlugin:
         profile_actions.get(self.Profile, lambda: None)()
 
     def handle_load_balancing(self, available_amperes):
-        Domoticz.Debug("control_charging load balancing")        
-        self.set_charge_within_limits(available_amperes + self.currentcurrent if (available_amperes + self.currentcurrent) >= 0 else 0)
-        
+        Domoticz.Debug("control_charging load balancing")
         if self.has_ct_clamps:
             # Bij CT-klemmen regelt de laadpaal zelf de LoadBalancing, de limiet zetten we op max.
             Domoticz.Debug("CT loadbalancing")
@@ -662,7 +707,11 @@ class PeblarPlugin:
 
     def handle_solar_only(self, available_amperes, household_current):
         Domoticz.Debug("control_charging solar only")
-        self.set_charge_within_limits(-household_current + self.currentcurrent  if (-household_current + self.currentcurrent) > 6 else 0)
+        if self.lastChargeLimit == 0:
+            startTreshold = 7
+        else:
+            startTreshold = 6
+        self.set_charge_within_limits(-household_current + self.currentcurrent  if (-household_current + self.currentcurrent) > startTreshold else 0)
 
     def set_charge_within_limits(self, available_amperes):
         """ 
@@ -670,8 +719,21 @@ class PeblarPlugin:
         Als de beschikbare stroom lager is dan 6A en de lader is actief, zet hem op pauze. 
         Houd de cooldown bij.
         """
+        # Check if we need to switch between 1-phase and 3-phase charging based on available amperes and not in cooldown period
+        if self.force1phase_allowed and self.force1phase is not None and self.lastChargeLimit != 0:
+            # 18 A is the 3-phase minimum. Keep a 1 A hysteresis margin
+            # on both sides to avoid repeatedly switching phase modes.
+            if self.force1phase and available_amperes >= 19:
+                self.setForce1Phase(False)
+            elif not self.force1phase and available_amperes <= 17:
+                self.setForce1Phase(True)
+
+        # available_amperes is total current; in normal 3-phase mode the
+        # Peblar limit is per phase, so convert total current to per-phase.
+        if self.force1phase_allowed and self.force1phase is False:
+            available_amperes /= 3
+
         current_time = time.time()
-        
         if available_amperes >= 6 and (current_time - self.lastDisabledTime >= self.enableDelay):
             charge_limit = min(16, max(6, available_amperes // 1))  # Zet laadstroom binnen de limieten
             self.setChargeCurrentLimitBalancing(charge_limit)
